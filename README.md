@@ -185,6 +185,16 @@ cd hy3dgen/texgen/differentiable_renderer
 python3 setup.py install
 ```
 
+#### Optional Dependencies
+
+For better quality mesh extraction, you can optionally install `diso`:
+
+```bash
+pip install diso
+```
+
+If `diso` is not installed, the system will automatically fall back to standard marching cubes algorithm. The fallback provides good quality results but `diso` may offer improved mesh quality in some cases.
+
 ### Code Usage
 
 We designed a diffusers-like API to use our shape generation model - Hunyuan3D-DiT and texture synthesis model -

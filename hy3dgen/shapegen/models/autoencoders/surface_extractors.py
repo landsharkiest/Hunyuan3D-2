@@ -89,14 +89,25 @@ class DMCSurfaceExtractor(SurfaceExtractor):
             try:
                 from diso import DiffDMC
                 self.dmc = DiffDMC(dtype=torch.float32).to(device)
-            except ImportError:
+            except (ImportError, Exception) as e:
                 # Fallback to standard marching cubes
                 import warnings
-                warnings.warn(
-                    "diso module not found. Falling back to standard marching cubes. "
-                    "For better quality, install diso via `pip install diso`.",
-                    UserWarning
-                )
+                import logging
+                logger = logging.getLogger(__name__)
+                
+                if isinstance(e, ImportError):
+                    message = (
+                        "diso module not found. Falling back to standard marching cubes. "
+                        "For better quality, install diso via `pip install diso`."
+                    )
+                else:
+                    message = (
+                        f"Failed to initialize diso ({type(e).__name__}: {e}). "
+                        "Falling back to standard marching cubes."
+                    )
+                    logger.debug(f"diso initialization error: {e}", exc_info=True)
+                
+                warnings.warn(message, UserWarning)
                 self._use_fallback = True
                 self._fallback_extractor = MCSurfaceExtractor()
         

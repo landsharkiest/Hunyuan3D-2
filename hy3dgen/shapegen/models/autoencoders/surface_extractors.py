@@ -13,10 +13,13 @@
 # by Tencent in accordance with TENCENT HUNYUAN COMMUNITY LICENSE AGREEMENT.
 
 from typing import Union, Tuple, List
+import logging
 
 import numpy as np
 import torch
 from skimage import measure
+
+logger = logging.getLogger(__name__)
 
 
 class Latent2MeshOutput:
@@ -89,25 +92,25 @@ class DMCSurfaceExtractor(SurfaceExtractor):
             try:
                 from diso import DiffDMC
                 self.dmc = DiffDMC(dtype=torch.float32).to(device)
-            except (ImportError, Exception) as e:
-                # Fallback to standard marching cubes
+            except ImportError:
+                # diso module not installed - fall back to standard MC
                 import warnings
-                import logging
-                logger = logging.getLogger(__name__)
-                
-                if isinstance(e, ImportError):
-                    message = (
-                        "diso module not found. Falling back to standard marching cubes. "
-                        "For better quality, install diso via `pip install diso`."
-                    )
-                else:
-                    message = (
-                        f"Failed to initialize diso ({type(e).__name__}: {e}). "
-                        "Falling back to standard marching cubes."
-                    )
-                    logger.debug(f"diso initialization error: {e}", exc_info=True)
-                
-                warnings.warn(message, UserWarning)
+                warnings.warn(
+                    "diso module not found. Falling back to standard marching cubes. "
+                    "For better quality, install diso via `pip install diso`.",
+                    UserWarning
+                )
+                self._use_fallback = True
+                self._fallback_extractor = MCSurfaceExtractor()
+            except (RuntimeError, ValueError, TypeError, AttributeError) as e:
+                # diso initialization failed - fall back to standard MC
+                import warnings
+                warnings.warn(
+                    f"Failed to initialize diso ({type(e).__name__}: {e}). "
+                    "Falling back to standard marching cubes.",
+                    UserWarning
+                )
+                logger.debug(f"diso initialization error: {e}", exc_info=True)
                 self._use_fallback = True
                 self._fallback_extractor = MCSurfaceExtractor()
         

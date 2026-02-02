@@ -77,14 +77,34 @@ class MCSurfaceExtractor(SurfaceExtractor):
 
 
 class DMCSurfaceExtractor(SurfaceExtractor):
+    def __init__(self):
+        super().__init__()
+        self._use_fallback = False
+        
     def run(self, grid_logit, *, octree_resolution, **kwargs):
         device = grid_logit.device
-        if not hasattr(self, 'dmc'):
+        
+        # Try to use diso if available (only check once)
+        if not hasattr(self, 'dmc') and not self._use_fallback:
             try:
                 from diso import DiffDMC
-            except:
-                raise ImportError("Please install diso via `pip install diso`, or set mc_algo to 'mc'")
-            self.dmc = DiffDMC(dtype=torch.float32).to(device)
+                self.dmc = DiffDMC(dtype=torch.float32).to(device)
+            except ImportError:
+                # Fallback to standard marching cubes
+                import warnings
+                warnings.warn(
+                    "diso module not found. Falling back to standard marching cubes. "
+                    "For better quality, install diso via `pip install diso`.",
+                    UserWarning
+                )
+                self._use_fallback = True
+                self._fallback_extractor = MCSurfaceExtractor()
+        
+        # Use fallback if diso is not available
+        if self._use_fallback:
+            return self._fallback_extractor.run(grid_logit, octree_resolution=octree_resolution, **kwargs)
+        
+        # Use diso if available
         sdf = -grid_logit / octree_resolution
         sdf = sdf.to(torch.float32).contiguous()
         verts, faces = self.dmc(sdf, deform=None, return_quads=False, normalize=True)

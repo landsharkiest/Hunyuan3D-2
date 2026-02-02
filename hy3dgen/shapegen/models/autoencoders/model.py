@@ -180,7 +180,7 @@ class VectsetVAE(nn.Module):
         enabled: bool = True,
         adaptive_kv_selection=True,
         topk_mode='mean',
-        mc_algo='dmc',
+        mc_algo='mc',
     ):
         if enabled:
             if adaptive_kv_selection:

@@ -80,12 +80,11 @@ class DMCSurfaceExtractor(SurfaceExtractor):
     def __init__(self):
         super().__init__()
         self._use_fallback = False
-        self._fallback_extractor = None
         
     def run(self, grid_logit, *, octree_resolution, **kwargs):
         device = grid_logit.device
         
-        # Try to use diso if available
+        # Try to use diso if available (only check once)
         if not hasattr(self, 'dmc') and not self._use_fallback:
             try:
                 from diso import DiffDMC

@@ -380,6 +380,8 @@ class FlashVDMVolumeDecoding:
             batch_latents = repeat(latents.squeeze(0), "p c -> b p c", b=batch)
             processor.topk = True
             logits = geo_decoder(queries=queries, latents=batch_latents)
+            # Reshape logits to match expected dimensions [batch, mini_grid_size, mini_grid_size, mini_grid_size]
+            logits = logits.reshape(batch, mini_grid_size, mini_grid_size, mini_grid_size)
             grid_logits_list[start:end] = logits
         
         grid_logits = grid_logits_list.reshape(

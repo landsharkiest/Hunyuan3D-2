@@ -248,12 +248,31 @@ class Hunyuan3DDiTPipeline:
         self.conditioner = conditioner
         self.image_processor = image_processor
         self.kwargs = kwargs
+        self._condition_cache = {}  # Cache for condition embeddings
+        self._cache_max_size = 128  # Maximum number of cached conditions
         self.to(device, dtype)
+        
+        # Auto-enable FlashVDM for turbo/mini models
+        if 'from_pretrained_kwargs' in kwargs:
+            subfolder = kwargs['from_pretrained_kwargs'].get('subfolder', '')
+            if 'turbo' in subfolder.lower() or 'mini' in subfolder.lower():
+                logger.info(f"Auto-enabling FlashVDM for {subfolder}")
+                self.enable_flashvdm(topk_mode='merge', mc_algo='dmc')
 
-    def compile(self):
-        self.vae = torch.compile(self.vae)
-        self.model = torch.compile(self.model)
-        self.conditioner = torch.compile(self.conditioner)
+    def compile(self, mode='default'):
+        """Compile models with torch.compile for 1.2-1.4x speedup.
+        
+        Args:
+            mode: Compilation mode - 'default', 'reduce-overhead', or 'max-autotune'
+        """
+        try:
+            logger.info(f"Compiling models with mode={mode}...")
+            self.vae = torch.compile(self.vae, mode=mode)
+            self.model = torch.compile(self.model, mode=mode)
+            self.conditioner = torch.compile(self.conditioner, mode=mode)
+            logger.info("Model compilation successful")
+        except Exception as e:
+            logger.warning(f"torch.compile failed: {e}. Continuing without compilation.")
 
     def enable_flashvdm(
         self,
@@ -296,6 +315,58 @@ class Hunyuan3DDiTPipeline:
                 model_path, subfolder = vae_mapping[model_name]
                 self.vae = ShapeVAE.from_pretrained(model_path, subfolder=subfolder)
             self.vae.enable_flashvdm_decoder(enabled=False)
+
+    def clear_cache(self):
+        """Clear the condition embedding cache."""
+        self._condition_cache.clear()
+        logger.info("Condition cache cleared")
+    
+    def get_optimal_settings(self, speed_priority=0.5):
+        """Get optimal generation settings based on available VRAM.
+        
+        Args:
+            speed_priority: 0.0 = quality focused, 1.0 = speed focused
+            
+        Returns:
+            dict with recommended num_chunks, octree_resolution, enable_cpu_offload
+        """
+        try:
+            if torch.cuda.is_available():
+                vram_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                
+                # Base settings on VRAM
+                if vram_gb >= 16:
+                    settings = {
+                        'num_chunks': 100000,
+                        'octree_resolution': 380,
+                        'enable_cpu_offload': False
+                    }
+                elif vram_gb >= 8:
+                    settings = {
+                        'num_chunks': 50000,
+                        'octree_resolution': 360,
+                        'enable_cpu_offload': False
+                    }
+                else:
+                    settings = {
+                        'num_chunks': 20000,
+                        'octree_resolution': 320,
+                        'enable_cpu_offload': True
+                    }
+                
+                # Adjust based on speed priority
+                if speed_priority > 0.7:
+                    settings['octree_resolution'] = max(256, settings['octree_resolution'] - 64)
+                    settings['num_chunks'] = min(150000, int(settings['num_chunks'] * 1.5))
+                
+                logger.info(f"Optimal settings for {vram_gb:.1f}GB VRAM: {settings}")
+                return settings
+            else:
+                logger.warning("CUDA not available, returning conservative settings")
+                return {'num_chunks': 10000, 'octree_resolution': 256, 'enable_cpu_offload': True}
+        except Exception as e:
+            logger.warning(f"Failed to determine optimal settings: {e}")
+            return {'num_chunks': 50000, 'octree_resolution': 360, 'enable_cpu_offload': False}
 
     def to(self, device=None, dtype=None):
         if dtype is not None:
@@ -423,6 +494,21 @@ class Hunyuan3DDiTPipeline:
     @synchronize_timer('Encode cond')
     def encode_cond(self, image, additional_cond_inputs, do_classifier_free_guidance, dual_guidance):
         bsz = image.shape[0]
+        
+        # Create cache key from image tensor statistics
+        cache_key = (
+            image.shape,
+            round(image.mean().item(), 6),
+            round(image.std().item(), 6),
+            do_classifier_free_guidance,
+            dual_guidance
+        )
+        
+        # Check cache
+        if cache_key in self._condition_cache:
+            logger.debug(f"Using cached condition embedding")
+            return self._condition_cache[cache_key]
+        
         cond = self.conditioner(image=image, **additional_cond_inputs)
 
         if do_classifier_free_guidance:
@@ -451,6 +537,13 @@ class Hunyuan3DDiTPipeline:
                     return out
 
                 cond = cat_recursive(cond, un_cond)
+        
+        # Store in cache (implement simple LRU by removing oldest if full)
+        if len(self._condition_cache) >= self._cache_max_size:
+            # Remove oldest entry (first key)
+            self._condition_cache.pop(next(iter(self._condition_cache)))
+        self._condition_cache[cache_key] = cond
+        
         return cond
 
     def prepare_extra_step_kwargs(self, generator, eta):
@@ -558,12 +651,12 @@ class Hunyuan3DDiTPipeline:
         eta: float = 0.0,
         guidance_scale: float = 7.5,
         dual_guidance_scale: float = 10.5,
-        dual_guidance: bool = True,
+        dual_guidance: bool = False,
         generator=None,
         box_v=1.01,
         octree_resolution=384,
         mc_level=-1 / 512,
-        num_chunks=8000,
+        num_chunks=100000,
         mc_algo=None,
         output_type: Optional[str] = "trimesh",
         enable_pbar=True,
@@ -651,7 +744,7 @@ class Hunyuan3DDiTPipeline:
         output_type='trimesh',
         box_v=1.01,
         mc_level=0.0,
-        num_chunks=20000,
+        num_chunks=100000,
         octree_resolution=256,
         mc_algo='mc',
         enable_pbar=True
@@ -693,7 +786,7 @@ class Hunyuan3DDiTFlowMatchingPipeline(Hunyuan3DDiTPipeline):
         octree_resolution=384,
         mc_level=0.0,
         mc_algo=None,
-        num_chunks=8000,
+        num_chunks=100000,
         output_type: Optional[str] = "trimesh",
         enable_pbar=True,
         **kwargs,

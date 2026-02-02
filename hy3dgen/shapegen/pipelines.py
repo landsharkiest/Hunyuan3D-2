@@ -257,7 +257,7 @@ class Hunyuan3DDiTPipeline:
             subfolder = kwargs['from_pretrained_kwargs'].get('subfolder', '')
             if 'turbo' in subfolder.lower() or 'mini' in subfolder.lower():
                 logger.info(f"Auto-enabling FlashVDM for {subfolder}")
-                self.enable_flashvdm(topk_mode='merge', mc_algo='dmc')
+                self.enable_flashvdm(topk_mode='merge', mc_algo='mc')
 
     def compile(self, mode='default'):
         """Compile models with torch.compile for 1.2-1.4x speedup.
